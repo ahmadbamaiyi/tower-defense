@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Tower Defense</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body {
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vmin;
+            height: 100vmin;
+            max-width: 800px;
+            max-height: 800px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border: 3px solid #16213e;
+            border-radius: 10px;
+            cursor: crosshair;
+        }
+
+        #ui-overlay {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .tower-btn {
+            pointer-events: auto;
+            padding: 10px 15px;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            background: #16213e;
+            color: #e94560;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s;
+            text-align: center;
+            min-width: 70px;
+        }
+
+        .tower-btn.selected {
+            background: #e94560;
+            color: #16213e;
+            border-color: #e94560;
+            box-shadow: 0 0 15px rgba(233, 69, 96, 0.5);
+        }
+
+        .tower-btn:active {
+            transform: scale(0.95);
+        }
+
+        #info-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            color: #fff;
+            font-weight: bold;
+            font-size: 16px;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+
+        #info-panel span {
+            background: rgba(22, 33, 62, 0.9);
+            padding: 8px 15px;
+            border-radius: 20px;
+        }
+
+        #start-wave-btn {
+            pointer-events: auto;
+            position: absolute;
+            top: 60px;
+            right: 10px;
+            padding: 12px 25px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(233, 69, 96, 0.4);
+        }
+
+        #start-wave-btn:active {
+            transform: scale(0.95);
+        }
+
+        @media (max-width: 600px) {
+            .tower-btn {
+                padding: 8px 10px;
+                font-size: 12px;
+                min-width: 55px;
+            }
+            #info-panel {
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="info-panel">
+            <span>❤️ <span id="lives">20</span></span>
+            <span>💰 <span id="gold">200</span></span>
+            <span>🌊 <span id="wave">1</span></span>
+            <span>💀 <span id="kills">0</span></span>
+        </div>
+        <button id="start-wave-btn">SEND WAVE</button>
+        <div id="ui-overlay">
+            <button class="tower-btn selected" data-tower="arrow">🏹 Arrow<br>50g</button>
+            <button class="tower-btn" data-tower="cannon">💣 Cannon<br>100g</button>
+            <button class="tower-btn" data-tower="ice">❄️ Ice<br>75g</button>
+            <button class="tower-btn" data-tower="lightning">⚡ Lightning<br>150g</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
