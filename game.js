@@ -1,5 +1,5 @@
 // ============================================
-// TOWER DEFENSE GAME - COMPLETE ENGINE
+// TOWER DEFENSE GAME - FIXED VERSION
 // ============================================
 
 const canvas = document.getElementById('gameCanvas');
@@ -27,8 +27,10 @@ const state = {
     particles: [],
     gameOver: false,
     waveActive: false,
-    enemiesRemaining: 0,
-    placingTower: null,
+    enemiesToSpawn: 0,
+    enemiesSpawned: 0,
+    spawnTimer: 0,
+    spawnDelay: 30, // frames between enemy spawns
 };
 
 // ============================================
@@ -69,12 +71,11 @@ const towerDefs = {
         cost: 50,
         damage: 15,
         range: 120,
-        fireRate: 30, // frames between shots
+        fireRate: 30,
         color: '#4ade80',
         projectileColor: '#a3e635',
         projectileSpeed: 8,
         splash: 0,
-        description: 'Fast, single target',
     },
     cannon: {
         name: 'Cannon Tower',
@@ -86,7 +87,6 @@ const towerDefs = {
         projectileColor: '#fdba74',
         projectileSpeed: 5,
         splash: 40,
-        description: 'Slow, area damage',
     },
     ice: {
         name: 'Ice Tower',
@@ -100,7 +100,6 @@ const towerDefs = {
         splash: 0,
         slow: 0.5,
         slowDuration: 60,
-        description: 'Slows enemies',
     },
     lightning: {
         name: 'Lightning Tower',
@@ -112,7 +111,6 @@ const towerDefs = {
         projectileColor: '#e9d5ff',
         projectileSpeed: 12,
         chain: 2,
-        description: 'Chain lightning',
     },
 };
 
@@ -120,8 +118,6 @@ const towerDefs = {
 // PATHFINDING (A* Algorithm)
 // ============================================
 function getWaypoints() {
-    // Simplified: Use predefined path based on map
-    const path = [];
     const visited = new Set();
     const queue = [{ col: startPos.col, row: startPos.row, path: [] }];
     
@@ -180,7 +176,6 @@ class Tower {
     update(enemies) {
         if (this.fireCooldown > 0) this.fireCooldown--;
 
-        // Find closest enemy in range
         this.target = null;
         let closestDist = Infinity;
         
@@ -220,7 +215,6 @@ class Tower {
     }
 
     draw(ctx) {
-        // Draw range indicator when selected for placement
         // Draw base
         ctx.fillStyle = this.def.color;
         ctx.beginPath();
@@ -244,6 +238,15 @@ class Tower {
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(this.level, this.x, this.y - GRID_SIZE * 0.4);
+        
+        // Draw range when hovering/selected
+        if (this === state.selectedTowerForUpgrade) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.def.range, 0, Math.PI * 2);
+            ctx.stroke();
+        }
     }
 }
 
@@ -260,9 +263,12 @@ class Enemy {
         this.slowAmount = 1;
         this.slowTimer = 0;
         this.reward = 10 + wave * 2;
+        this.alive = true;
     }
 
     update() {
+        if (!this.alive) return;
+        
         if (this.slowTimer > 0) {
             this.slowTimer--;
             if (this.slowTimer <= 0) this.slowAmount = 1;
@@ -291,7 +297,9 @@ class Enemy {
     }
 
     takeDamage(amount) {
+        if (!this.alive) return false;
         this.hp -= amount;
+        
         // Spawn hit particles
         for (let i = 0; i < 5; i++) {
             state.particles.push(new Particle(
@@ -301,7 +309,15 @@ class Enemy {
                 '#ff6b6b', 15
             ));
         }
-        return this.hp <= 0;
+        
+        if (this.hp <= 0) {
+            this.alive = false;
+            state.gold += this.reward;
+            state.kills++;
+            updateUI();
+            return true;
+        }
+        return false;
     }
 
     applySlow(amount, duration) {
@@ -310,6 +326,8 @@ class Enemy {
     }
 
     draw(ctx) {
+        if (!this.alive) return;
+        
         const hpPercent = this.hp / this.maxHp;
         
         // Enemy body
@@ -318,7 +336,7 @@ class Enemy {
         ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
         ctx.fill();
         
-        // Enemy eyes
+        // Eyes
         ctx.fillStyle = '#fff';
         ctx.beginPath();
         ctx.arc(this.x - 5, this.y - 5, 4, 0, Math.PI * 2);
@@ -352,7 +370,8 @@ class Projectile {
     }
 
     update() {
-        if (!this.target || this.target.hp <= 0) {
+        if (!this.active) return;
+        if (!this.target || !this.target.alive) {
             this.active = false;
             return;
         }
@@ -370,33 +389,32 @@ class Projectile {
     }
 
     hit() {
+        if (!this.active) return;
         this.active = false;
         
-        if (this.target && this.target.takeDamage(this.damage)) {
-            state.gold += this.target.reward;
-            state.kills++;
-        }
+        if (!this.target || !this.target.alive) return;
+        
+        const killed = this.target.takeDamage(this.damage);
 
-        // Apply special effects
         const def = towerDefs[this.type];
         
-        if (def.slow && this.target) {
+        // Slow effect
+        if (def.slow && this.target.alive) {
             this.target.applySlow(def.slow, def.slowDuration);
         }
         
+        // Splash damage
         if (def.splash > 0) {
             for (const enemy of state.enemies) {
+                if (!enemy.alive || enemy === this.target) continue;
                 const dx = enemy.x - this.target.x;
                 const dy = enemy.y - this.target.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist <= def.splash && enemy !== this.target) {
-                    if (enemy.takeDamage(this.damage * 0.5)) {
-                        state.gold += enemy.reward;
-                        state.kills++;
-                    }
+                if (dist <= def.splash) {
+                    enemy.takeDamage(this.damage * 0.5);
                 }
             }
-            // Splash visual
+            // Splash particles
             for (let i = 0; i < 10; i++) {
                 state.particles.push(new Particle(
                     this.target.x, this.target.y,
@@ -407,13 +425,14 @@ class Projectile {
             }
         }
         
+        // Chain lightning
         if (def.chain) {
             let lastTarget = this.target;
             for (let c = 0; c < def.chain; c++) {
                 let closestEnemy = null;
                 let closestDist = 100;
                 for (const enemy of state.enemies) {
-                    if (enemy === lastTarget || enemy.hp <= 0) continue;
+                    if (!enemy.alive || enemy === lastTarget) continue;
                     const dx = enemy.x - lastTarget.x;
                     const dy = enemy.y - lastTarget.y;
                     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -423,16 +442,7 @@ class Projectile {
                     }
                 }
                 if (closestEnemy) {
-                    if (closestEnemy.takeDamage(this.damage * 0.6)) {
-                        state.gold += closestEnemy.reward;
-                        state.kills++;
-                    }
-                    // Chain visual
-                    state.particles.push(new Particle(
-                        lastTarget.x, lastTarget.y,
-                        closestEnemy.x, closestEnemy.y,
-                        '#c084fc', 10, true
-                    ));
+                    closestEnemy.takeDamage(this.damage * 0.6);
                     lastTarget = closestEnemy;
                 } else break;
             }
@@ -440,6 +450,7 @@ class Projectile {
     }
 
     draw(ctx) {
+        if (!this.active) return;
         ctx.fillStyle = this.color;
         ctx.beginPath();
         ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
@@ -448,7 +459,7 @@ class Projectile {
 }
 
 class Particle {
-    constructor(x, y, vx, vy, color, life, isChain = false) {
+    constructor(x, y, vx, vy, color, life) {
         this.x = x;
         this.y = y;
         this.vx = vx;
@@ -456,7 +467,6 @@ class Particle {
         this.color = color;
         this.life = life;
         this.maxLife = life;
-        this.isChain = isChain;
     }
 
     update() {
@@ -468,75 +478,102 @@ class Particle {
 
     draw(ctx) {
         const alpha = this.life / this.maxLife;
-        ctx.strokeStyle = this.color;
+        ctx.fillStyle = this.color;
         ctx.globalAlpha = alpha;
-        
-        if (this.isChain) {
-            ctx.beginPath();
-            ctx.moveTo(this.x, this.y);
-            ctx.lineTo(this.x + this.vx, this.y + this.vy);
-            ctx.stroke();
-        } else {
-            ctx.fillStyle = this.color;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, 3 * alpha, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 3 * alpha, 0, Math.PI * 2);
+        ctx.fill();
         ctx.globalAlpha = 1;
     }
+}
+
+// ============================================
+// WAVE SYSTEM (FIXED)
+// ============================================
+function startWave() {
+    // 🔥 FIX: Only block if wave is currently active (enemies still spawning or alive)
+    if (state.waveActive) {
+        console.log('Wave already in progress!');
+        return false;
+    }
+    
+    if (state.gameOver) return false;
+    
+    state.waveActive = true;
+    const numEnemies = 5 + state.wave * 3;
+    state.enemiesToSpawn = numEnemies;
+    state.enemiesSpawned = 0;
+    state.spawnTimer = 0;
+    
+    console.log(`🌊 Starting Wave ${state.wave} with ${numEnemies} enemies!`);
+    document.getElementById('start-wave-btn').textContent = `WAVE ${state.wave}...`;
+    document.getElementById('start-wave-btn').style.opacity = '0.6';
+    
+    return true;
+}
+
+function updateWaveSpawning() {
+    if (!state.waveActive) return;
+    
+    // Still enemies to spawn
+    if (state.enemiesSpawned < state.enemiesToSpawn) {
+        state.spawnTimer++;
+        
+        if (state.spawnTimer >= state.spawnDelay) {
+            state.spawnTimer = 0;
+            state.enemies.push(new Enemy(state.wave));
+            state.enemiesSpawned++;
+            console.log(`Spawned enemy ${state.enemiesSpawned}/${state.enemiesToSpawn}`);
+        }
+    }
+    
+    // Check if wave is fully complete
+    if (state.enemiesSpawned >= state.enemiesToSpawn && 
+        state.enemies.length === 0) {
+        completeWave();
+    }
+}
+
+function completeWave() {
+    state.waveActive = false;
+    state.wave++;
+    const bonus = 50 + state.wave * 25;
+    state.gold += bonus;
+    
+    console.log(`✅ Wave ${state.wave - 1} complete! Bonus: ${bonus} gold`);
+    
+    document.getElementById('start-wave-btn').textContent = 'SEND WAVE';
+    document.getElementById('start-wave-btn').style.opacity = '1';
+    updateUI();
 }
 
 // ============================================
 // GAME FUNCTIONS
 // ============================================
 
-function spawnWave() {
-    if (state.waveActive || state.gameOver) return;
-    
-    state.waveActive = true;
-    const numEnemies = 5 + state.wave * 3;
-    state.enemiesRemaining = numEnemies;
-    
-    let spawned = 0;
-    const spawnInterval = setInterval(() => {
-        if (state.gameOver) {
-            clearInterval(spawnInterval);
-            return;
-        }
-        
-        state.enemies.push(new Enemy(state.wave));
-        spawned++;
-        
-        if (spawned >= numEnemies) {
-            clearInterval(spawnInterval);
-        }
-    }, 500);
-}
-
-function checkWaveComplete() {
-    if (state.waveActive && 
-        state.enemies.length === 0 && 
-        state.enemiesRemaining === 0) {
-        state.waveActive = false;
-        state.wave++;
-        state.gold += 50 + state.wave * 25;
-        updateUI();
-    }
-}
-
 function placeTower(col, row) {
     const idx = row * COLS + col;
-    if (mapData[idx] !== 1) return false;
+    if (mapData[idx] !== 1) {
+        console.log("Can't build on path!");
+        return false;
+    }
     
-    // Check if tower already exists
+    // Check if tower already exists there
     const exists = state.towers.some(t => t.col === col && t.row === row);
-    if (exists) return false;
+    if (exists) {
+        console.log("Tower already here!");
+        return false;
+    }
     
     const def = towerDefs[state.selectedTower];
-    if (state.gold < def.cost) return false;
+    if (state.gold < def.cost) {
+        console.log(`Not enough gold! Need ${def.cost}, have ${state.gold}`);
+        return false;
+    }
     
     state.gold -= def.cost;
     state.towers.push(new Tower(col, row, state.selectedTower));
+    console.log(`Built ${def.name} at (${col}, ${row})`);
     updateUI();
     return true;
 }
@@ -546,22 +583,32 @@ function upgradeTower(tower) {
     if (state.gold >= cost && tower.level < 5) {
         state.gold -= cost;
         tower.level++;
+        console.log(`Upgraded tower to level ${tower.level}! Cost: ${cost}`);
         updateUI();
+    } else if (tower.level >= 5) {
+        console.log("Tower is max level!");
+    } else {
+        console.log(`Not enough gold! Need ${cost}, have ${state.gold}`);
     }
 }
 
 // ============================================
-// INPUT HANDLING (Mouse + Touch)
+// INPUT HANDLING
 // ============================================
+state.selectedTowerForUpgrade = null;
+
 function getCanvasCoords(e) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     
     let clientX, clientY;
-    if (e.touches) {
+    if (e.touches && e.touches.length > 0) {
         clientX = e.touches[0].clientX;
         clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+        clientX = e.changedTouches[0].clientX;
+        clientY = e.changedTouches[0].clientY;
     } else {
         clientX = e.clientX;
         clientY = e.clientY;
@@ -573,38 +620,31 @@ function getCanvasCoords(e) {
     };
 }
 
-canvas.addEventListener('click', (e) => {
+function handleCanvasClick(e) {
     if (state.gameOver) return;
     
     const { x, y } = getCanvasCoords(e);
     const col = Math.floor(x / GRID_SIZE);
     const row = Math.floor(y / GRID_SIZE);
     
-    // Check if clicking on existing tower
+    // Check if clicking on existing tower to upgrade
     const clickedTower = state.towers.find(t => t.col === col && t.row === row);
     if (clickedTower) {
         upgradeTower(clickedTower);
+        state.selectedTowerForUpgrade = clickedTower;
+        setTimeout(() => { state.selectedTowerForUpgrade = null; }, 1000);
         return;
     }
     
+    // Otherwise try to place new tower
     placeTower(col, row);
-});
+    state.selectedTowerForUpgrade = null;
+}
 
+canvas.addEventListener('click', handleCanvasClick);
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
-    if (state.gameOver) return;
-    
-    const { x, y } = getCanvasCoords(e);
-    const col = Math.floor(x / GRID_SIZE);
-    const row = Math.floor(y / GRID_SIZE);
-    
-    const clickedTower = state.towers.find(t => t.col === col && t.row === row);
-    if (clickedTower) {
-        upgradeTower(clickedTower);
-        return;
-    }
-    
-    placeTower(col, row);
+    handleCanvasClick(e);
 });
 
 // Tower selection buttons
@@ -613,18 +653,20 @@ document.querySelectorAll('.tower-btn').forEach(btn => {
         document.querySelectorAll('.tower-btn').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         state.selectedTower = btn.dataset.tower;
+        console.log(`Selected: ${towerDefs[state.selectedTower].name}`);
     });
     
-    // Prevent canvas click when pressing button
     btn.addEventListener('touchstart', (e) => {
         e.stopPropagation();
     });
 });
 
-document.getElementById('start-wave-btn').addEventListener('click', spawnWave);
-document.getElementById('start-wave-btn').addEventListener('touchstart', (e) => {
+// Wave button
+const waveBtn = document.getElementById('start-wave-btn');
+waveBtn.addEventListener('click', startWave);
+waveBtn.addEventListener('touchstart', (e) => {
     e.stopPropagation();
-    spawnWave();
+    startWave();
 });
 
 // ============================================
@@ -643,6 +685,9 @@ function updateUI() {
 function update() {
     if (state.gameOver) return;
     
+    // Handle wave spawning
+    updateWaveSpawning();
+    
     // Update towers
     for (const tower of state.towers) {
         tower.update(state.enemies);
@@ -660,24 +705,22 @@ function update() {
         
         if (enemy.reachedEnd()) {
             state.lives--;
-            enemy.hp = 0; // Mark for removal
+            enemy.alive = false;
+            console.log(`Enemy reached end! Lives: ${state.lives}`);
             updateUI();
             
             if (state.lives <= 0) {
                 state.gameOver = true;
+                console.log("💀 GAME OVER!");
             }
         }
     }
-    state.enemies = state.enemies.filter(e => e.hp > 0);
     
-    // Update enemy remaining count
-    state.enemiesRemaining = Math.max(0, state.enemiesRemaining - 
-        (state.enemiesRemaining > 0 && state.enemies.length < state.enemiesRemaining ? 0 : 0));
+    // Remove dead enemies
+    state.enemies = state.enemies.filter(e => e.alive);
     
     // Update particles
     state.particles = state.particles.filter(p => !p.update());
-    
-    checkWaveComplete();
 }
 
 function draw() {
@@ -692,21 +735,21 @@ function draw() {
             
             switch (mapData[idx]) {
                 case 0:
-                    ctx.fillStyle = '#d4a574';
+                    ctx.fillStyle = '#d4a574'; // Path
                     break;
                 case 1:
-                    ctx.fillStyle = '#2d5a27';
+                    ctx.fillStyle = '#2d5a27'; // Grass
                     break;
                 case 2:
-                    ctx.fillStyle = '#4ade80';
+                    ctx.fillStyle = '#4ade80'; // Start
                     break;
                 case 3:
-                    ctx.fillStyle = '#ef4444';
+                    ctx.fillStyle = '#ef4444'; // End
                     break;
             }
             
             ctx.fillRect(x, y, GRID_SIZE, GRID_SIZE);
-            ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+            ctx.strokeStyle = 'rgba(0,0,0,0.15)';
             ctx.strokeRect(x, y, GRID_SIZE, GRID_SIZE);
         }
     }
@@ -731,25 +774,37 @@ function draw() {
         proj.draw(ctx);
     }
     
-    // Draw tower placement preview
-    if (state.selectedTower) {
-        canvas.style.cursor = 'crosshair';
+    // Wave progress indicator
+    if (state.waveActive && state.enemiesToSpawn > 0) {
+        const progress = state.enemiesSpawned / state.enemiesToSpawn;
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        ctx.fillRect(10, canvas.height - 30, canvas.width - 20, 20);
+        ctx.fillStyle = '#e94560';
+        ctx.fillRect(10, canvas.height - 30, (canvas.width - 20) * progress, 20);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(
+            `Wave ${state.wave}: ${state.enemiesSpawned}/${state.enemiesToSpawn} spawned | ${state.enemies.length} alive`,
+            canvas.width / 2, canvas.height - 15
+        );
     }
     
     // Game over screen
     if (state.gameOver) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = '#e94560';
         ctx.font = 'bold 48px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 30);
         
+        ctx.fillStyle = '#fff';
         ctx.font = '24px Arial';
-        ctx.fillText(`Survived ${state.wave - 1} waves`, canvas.width / 2, canvas.height / 2 + 30);
-        ctx.fillText(`Killed ${state.kills} enemies`, canvas.width / 2, canvas.height / 2 + 60);
-        ctx.fillText('Refresh to play again', canvas.width / 2, canvas.height / 2 + 100);
+        ctx.fillText(`Survived ${state.wave - 1} waves`, canvas.width / 2, canvas.height / 2 + 20);
+        ctx.fillText(`Killed ${state.kills} enemies`, canvas.width / 2, canvas.height / 2 + 55);
+        ctx.fillText('🔄 Refresh to play again', canvas.width / 2, canvas.height / 2 + 95);
     }
 }
 
@@ -765,8 +820,9 @@ function gameLoop() {
 updateUI();
 gameLoop();
 
-console.log('🏰 Tower Defense Ready!');
+console.log('🏰 Tower Defense - FIXED VERSION');
 console.log('📱 Works on desktop & mobile');
-console.log('🎯 Click/tap green areas to place towers');
+console.log('🎯 Click/tap green grass to place towers');
 console.log('💡 Click existing towers to upgrade them');
-console.log('🌊 Press SEND WAVE to start!');
+console.log('🌊 Press SEND WAVE to start each wave');
+console.log('🔄 Waves can be sent repeatedly now!');
